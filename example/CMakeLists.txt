@@ -17,6 +17,12 @@ add_executable(get_sound_speed_press
 target_link_libraries(get_sound_speed_press PRIVATE
   singularity-eos::singularity-eos)
 
+add_executable(test_root_thresh 
+  test_root_thresh.cpp)
+target_link_libraries(test_root_thresh PRIVATE 
+  singularity-eos::singularity-eos)
+
+
 if (SINGULARITY_USE_SPINER_WITH_HDF5)
   add_executable(eos_grid eos_grid.cpp)
   target_link_libraries(eos_grid PRIVATE
@@ -38,4 +44,5 @@ if(SINGULARITY_USE_EOSPAC AND SINGULARITY_USE_SPINER_WITH_HDF5)
     get_spiner_bounds.cpp)
   target_link_libraries(get_spiner_bounds PRIVATE
     singularity-eos::singularity-eos)
+
 endif()

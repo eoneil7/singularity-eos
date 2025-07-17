@@ -220,6 +220,8 @@ PORTABLE_INLINE_FUNCTION Status regula_falsi(const T &f, const Real ytarget,
     }
     iteration_count++;
   }
+  std::cout << "Root finder iteration: " << iteration_count << std::endl;
+
   auto status = Status::SUCCESS;
   if (iteration_count == max_iter) {
     if (verbose) {
