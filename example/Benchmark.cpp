@@ -1,23 +1,19 @@
 /*
-  This script has the following capabilities:
-  1. Compares the performance of SpinerEOSDependsRhoT and SpinerEOSDependsRhoSie without transformations
-  2. Compares the performance of SpinerEOSDependsRhoT and SpinerEosDependsRhoSie with transformations 
-  3. Compares them both to EOSPAC
+  This script compares the performance of EOSPAC SpinerEOSDependsRhoT and SpinerEOSDependsRhoSie in the following cases:
 
-  We test the following:
-  1. P(rho, T) and e(rho, T) lookups on a log-regular grid of density-temperature points designed to cover the entire domain
-  2. P(rho, T) and e(rho, T) lookups on the exact pairs of density-temperature points that correspond to the SESAME grid
-  3. P(rho, e(rho, T)) and T(rho, e(rho, T)) lookups on the SESAME grid points
+  1. P(rho, T) 
+  2. e(rho, T) 
+  3. P(rho, e(rho, T)) 
+  4. T(rho, e(rho, T)) 
 
-  Example usage: ./eos_benchmark ./output_dir 100 100 ./tables/my_eos.sp5 2020 3720
+  The output of this script is as follows:
+  1. For each material, model, and lookup type, a .csv of the grid values (to compare accuracy)
+  2. A .csv of the lookup times for x-amount of trials (to compare performance)
+
+  Example usage: ./Benchmark ./output_dir 100 100 ./tables/my_eos.sp5 2020 3720
 
   Authors: Erin O'Neil and Joshua Basabe
  */
-
-#ifdef _SPINER_USE_HDF_
-#ifdef _SINGULARITY_USE_EOSPAC_
-
-//WOULD THIS BE GOOD TO PARALLELIZE? KOKKOS/OPENMP?
 
 //C++ Headers
 #include <algorithm>
@@ -28,7 +24,9 @@
 #include <limits>
 #include <string>
 #include <vector>
-#include <filesystem>
+#include <fstream>   
+#include <iomanip> 
+
 
 //Data headers
 #include <hdf5.h>
@@ -51,8 +49,8 @@
 using namespace singularity;
 using namespace EospacWrapper;
 using namespace std::chrono;
-using duration = std::chrono::microseconds;
-namespace fs = std::filesystem;
+#include <experimental/filesystem> //not sure why I had to do this
+namespace fs = std::experimental::filesystem;
 using DataBox = Spiner::DataBox<Real>;
 using RegularGrid1D = Spiner::RegularGrid1D<Real>;
 using Real = double;
@@ -100,8 +98,6 @@ int main(int argc, char* argv[]) {
         std::cerr << "Usage: " << argv[0] << " path/to/output nRho nT sp5_file matid1 matid2 ..."; //Is this good usage? 
         return 1;
     }
-    std::string base_output_path = "eos_benchmark_results/";
-    base_output_path = argv[1];
     fs::path base_output_path(argv[1]);
     //if the folder does not exist, try to make one
     if (!fs::exists(base_output_path)) {
@@ -144,15 +140,26 @@ int main(int argc, char* argv[]) {
         //These vectors will store the compute time for each model for the 20 trials
         std::vector<double> time_e_eos_ref_list, time_e_rt_list, time_e_rs_list;
         std::vector<double> time_P_eos_ref_T_list, time_P_rt_T_list, time_P_rs_T_list;
-        std::vector<double> time_P_eos_ref_sie_list, time_P_rt_sie_list; time_P_rs_sie_list;
+        std::vector<double> time_P_eos_ref_sie_list, time_P_rt_sie_list, time_P_rs_sie_list;
         std::vector<double> time_T_back_eos_ref_list, time_T_back_rt_list, time_T_back_rs_list;
 
         //These matrices will be filled with the EOS values (overwriting for each trail)
         //Then at the end of the program, we export the matrix to a .csv to later use for accuracy tests
-        Matrix<Real> e_eos_ref(nRho, nT), e_rt(nRho, nT), e_rs(nRho, nT);
-        Matrix<Real> P_eos_ref_T(nRho, nT), P_rt_T(nRho, nT), P_rs_T(nRho, nT);
-        Matrix<Real> P_eos_ref_sie(nRho, nT), P_rt_sie(nRho, nT), P_rs_sie(nRho, nT);
-        Matrix<Real> T_back_eos_ref(nRho, nT), T_back_rt(nRho, nT), T_back_rs(nRho, nT);
+        std::vector<std::vector<Real>> e_eos_ref(nRho, std::vector<Real>(nT));
+        std::vector<std::vector<Real>> e_rt(nRho, std::vector<Real>(nT));
+        std::vector<std::vector<Real>> e_rs(nRho, std::vector<Real>(nT));
+
+        std::vector<std::vector<Real>> P_eos_ref_T(nRho, std::vector<Real>(nT));
+        std::vector<std::vector<Real>> P_rt_T(nRho, std::vector<Real>(nT));
+        std::vector<std::vector<Real>> P_rs_T(nRho, std::vector<Real>(nT));
+
+        std::vector<std::vector<Real>> P_eos_ref_sie(nRho, std::vector<Real>(nT));
+        std::vector<std::vector<Real>> P_rt_sie(nRho, std::vector<Real>(nT));
+        std::vector<std::vector<Real>> P_rs_sie(nRho, std::vector<Real>(nT));
+
+        std::vector<std::vector<Real>> T_back_eos_ref(nRho, std::vector<Real>(nT));
+        std::vector<std::vector<Real>> T_back_rt(nRho, std::vector<Real>(nT));
+        std::vector<std::vector<Real>> T_back_rs(nRho, std::vector<Real>(nT));
 
         // === Benchmark Loop ===
         for (int rep = 0; rep < ntimes; ++rep) {
@@ -161,30 +168,31 @@ int main(int argc, char* argv[]) {
                 auto t0 = high_resolution_clock::now(); //e(rho, T) 
                 for (int i = 0; i < nRho; ++i) {
                     for (int j = 0; j < nT; ++j) { 
-                        e_eos_ref(i, j) = eos_ref.InternalEnergyFromDensityTemperature(rhos[i], temps[j]); } }
+                        e_eos_ref[i][j] = eos_ref.InternalEnergyFromDensityTemperature(rhos[i], temps[j]); } }
                 auto t1 = high_resolution_clock::now();
-                time_eos_ref_e_list.push_back(duration<double, std::micro>(t1 - t0).count());
+                std::chrono::duration<double, std::micro> elapsed = t1 - t0; //define "elapsed"
+                time_e_eos_ref_list.push_back(elapsed.count());
 
                 t0 = high_resolution_clock::now(); // P(rho, T)
                 for (int i = 0; i < nRho; ++i) {
                     for (int j = 0; j < nT; ++j) {
-                        P_eos_ref_T(i, j) = eos_ref.PressureFromDensityTemperature(rhos[i], temps[j]);}}
+                        P_eos_ref_T[i][j] = eos_ref.PressureFromDensityTemperature(rhos[i], temps[j]);}}
                 t1 = high_resolution_clock::now();
-                time_P_eos_ref_T_list.push_back(duration<double, std::micro>(t1 - t0).count());
+                time_P_eos_ref_T_list.push_back(elapsed.count());
 
                 t0 = high_resolution_clock::now(); // P(rho, sie)
                 for (int i = 0; i < nRho; ++i) {
                     for (int j = 0; j < nT; ++j) { //is this line supposed to still be nT, it uses e_eos_ref(i,j)
-                        P_eos_ref_sie(i, j) = eos_ref.PressureFromDensityInternalEnergy(rhos[i], e_eos_ref(i, j));}}
+                        P_eos_ref_sie[i][j] = eos_ref.PressureFromDensityInternalEnergy(rhos[i], e_eos_ref[i][j]);}}
                 t1 = high_resolution_clock::now();
-                time_P_eos_ref_sie_list.push_back(duration<double, std::micro>(t1 - t0).count());
+                time_P_eos_ref_sie_list.push_back(elapsed.count());
 
                 t0 = high_resolution_clock::now(); //T(rho, sie)
                 for (int i = 0; i < nRho; ++i) {
                     for (int j = 0; j < nT; ++j) { //same with this one
-                        T_back_eos_ref(i, j) = eos_ref.TemperatureFromDensityInternalEnergy(rhos[i], e_eos_ref(i, j));}}
+                        T_back_eos_ref[i][j] = eos_ref.TemperatureFromDensityInternalEnergy(rhos[i], e_eos_ref[i][j]);}}
                 t1 = high_resolution_clock::now();
-                time_T_back_eos_ref_list.push_back(duration<double, std::micro>(t1 - t0).count());
+                time_T_back_eos_ref_list.push_back(elapsed.count());
 
 
 
@@ -192,30 +200,30 @@ int main(int argc, char* argv[]) {
                 t0 = high_resolution_clock::now(); //e(rho, T) 
                 for (int i = 0; i < nRho; ++i) {
                     for (int j = 0; j < nT; ++j) {
-                        e_rt(i, j) = rt.InternalEnergyFromDensityTemperature(rhos[i], temps[j]);}}
+                        e_rt[i][j] = eos_rt.InternalEnergyFromDensityTemperature(rhos[i], temps[j]);}}
                 t1 = high_resolution_clock::now();
-                time_rt_e_list.push_back(duration<double, std::micro>(t1 - t0).count());
+                time_e_rt_list.push_back(elapsed.count());
 
                 t0 = high_resolution_clock::now(); // P(rho, T)
                 for (int i = 0; i < nRho; ++i) {
                     for (int j = 0; j < nT; ++j) {
-                        P_rt_T(i, j) = rt.PressureFromDensityTemperature(rhos[i], temps[j]);}}
+                        P_rt_T[i][j] = eos_rt.PressureFromDensityTemperature(rhos[i], temps[j]);}}
                 t1 = high_resolution_clock::now();
-                time_P_rt_T_list.push_back(duration<double, std::micro>(t1 - t0).count());
+                time_P_rt_T_list.push_back(elapsed.count());
 
                 t0 = high_resolution_clock::now(); // P(rho, sie)
                 for (int i = 0; i < nRho; ++i) {
                     for (int j = 0; j < nT; ++j) { //same with this one
-                        P_rt_sie(i, j) = rt.PressureFromDensityInternalEnergy(rhos[i], e_rt(i, j));}}
+                        P_rt_sie[i][j] = eos_rt.PressureFromDensityInternalEnergy(rhos[i], e_rt[i][j]);}}
                 t1 = high_resolution_clock::now();
-                time_P_rt_sie_list.push_back(duration<double, std::micro>(t1 - t0).count());
+                time_P_rt_sie_list.push_back(elapsed.count());
 
                 t0 = high_resolution_clock::now(); //T(rho, sie)
                 for (int i = 0; i < nRho; ++i) {
                     for (int j = 0; j < nT; ++j) { //same with this one
-                        T_back_rt(i, j) = rt.TemperatureFromDensityInternalEnergy(rhos[i], e_rt(i, j));}}
+                        T_back_rt[i][j] = eos_rt.TemperatureFromDensityInternalEnergy(rhos[i], e_rt[i][j]);}}
                 t1 = high_resolution_clock::now();
-                time_T_back_rt_list.push_back(duration<double, std::micro>(t1 - t0).count());
+                time_T_back_rt_list.push_back(elapsed.count());
 
 
 
@@ -223,61 +231,77 @@ int main(int argc, char* argv[]) {
                 t0 = high_resolution_clock::now(); //e(rho, T) 
                 for (int i = 0; i < nRho; ++i) {
                     for (int j = 0; j < nT; ++j) {
-                        e_rs(i, j) = rs.InternalEnergyFromDensityTemperature(rhos[i], temps[j]);}}
+                        e_rs[i][j] = eos_rs.InternalEnergyFromDensityTemperature(rhos[i], temps[j]);}}
                 t1 = high_resolution_clock::now();
-                time_rs_e_list.push_back(duration<double, std::micro>(t1 - t0).count());
+                time_e_rs_list.push_back(elapsed.count());
                 
                 t0 = high_resolution_clock::now(); // P(rho, T)
                 for (int i = 0; i < nRho; ++i) {
                     for (int j = 0; j < nT; ++j) {
-                        P_rs_T(i, j) = rs.PressureFromDensityTemperature(rhos[i], temps[j]);}}
+                        P_rs_T[i][j] = eos_rs.PressureFromDensityTemperature(rhos[i], temps[j]);}}
                 t1 = high_resolution_clock::now();
-                time_P_rs_T_list.push_back(duration<double, std::micro>(t1 - t0).count());
+                time_P_rs_T_list.push_back(elapsed.count());
 
                 t0 = high_resolution_clock::now(); // P(rho, sie)
                 for (int i = 0; i < nRho; ++i) {
                     for (int j = 0; j < nT; ++j) { //same with this one
-                        P_rs_sie(i, j) = rs.PressureFromDensityInternalEnergy(rhos[i], e_rs(i, j));}}
+                        P_rs_sie[i][j] = eos_rs.PressureFromDensityInternalEnergy(rhos[i], e_rs[i][j]);}}
                 t1 = high_resolution_clock::now();
-                time_P_rs_sie_list.push_back(duration<double, std::micro>(t1 - t0).count());
+                time_P_rs_sie_list.push_back(elapsed.count());
 
                 t0 = high_resolution_clock::now(); //T(rho, sie)
                 for (int i = 0; i < nRho; ++i) {
                     for (int j = 0; j < nT; ++j) { //same with this one
-                        T_back_rs(i, j) = rs.TemperatureFromDensityInternalEnergy(rhos[i], e_rs(i, j));}}
+                        T_back_rs[i][j] = eos_rs.TemperatureFromDensityInternalEnergy(rhos[i], e_rs[i][j]);}}
                 t1 = high_resolution_clock::now();
-                time_T_back_rs_list.push_back(duration<double, std::micro>(t1 - t0).count());
+                time_T_back_rs_list.push_back(elapsed.count());
 
         } //end for loop for # of trials
 
     //Only save the filled in grid values on the last loop (only one grid exported to compare accuracies)
-    write_matrix_csv((base_output_path / "eos_ref_internal_energy_" + matid + ".csv").string(), e_eos_ref); 
-    write_matrix_csv((base_output_path / "rt_internal_energy_" + matid + ".csv").string(), e_rt);
-    write_matrix_csv((base_output_path / "rs_internal_energy_" + matid + ".csv").string(), e_rs);
-    write_matrix_csv((base_output_path / "T_back_eos_ref_" + matid + ".csv").string(), T_back_eos_ref);
-    write_matrix_csv((base_output_path / "T_back_rt_" + matid + ".csv").string(), T_back_rt);
-    write_matrix_csv((base_output_path / "T_back_rs_" + matid + ".csv").string(), T_back_rs);
+    std::string filename;
+
+    filename = "eos_ref_internal_energy_" + std::to_string(matid) + "_nRho-" + std::to_string(nRho) + "_nT-" + std::to_string(nT) + ".csv";
+    write_matrix_csv((base_output_path / filename).string(), e_eos_ref);
+
+    filename = "rt_internal_energy_" + std::to_string(matid) + "_nRho-" + std::to_string(nRho) + "_nT-" + std::to_string(nT) + ".csv";
+    write_matrix_csv((base_output_path / filename).string(), e_rt);
+
+    filename = "rs_internal_energy_" + std::to_string(matid) + "_nRho-" + std::to_string(nRho) + "_nT-" + std::to_string(nT) + ".csv";
+    write_matrix_csv((base_output_path / filename).string(), e_rs);
+
+    filename = "T_back_eos_ref_" + std::to_string(matid) + "_nRho-" + std::to_string(nRho) + "_nT-" + std::to_string(nT) + ".csv";
+    write_matrix_csv((base_output_path / filename).string(), T_back_eos_ref);
+
+    filename = "T_back_rt_" + std::to_string(matid) + "_nRho-" + std::to_string(nRho) + "_nT-" + std::to_string(nT) + ".csv";
+    write_matrix_csv((base_output_path / filename).string(), T_back_rt);
+
+    filename = "T_back_rs_" + std::to_string(matid) + "_nRho-" + std::to_string(nRho) + "_nT-" + std::to_string(nT) + ".csv";
+    write_matrix_csv((base_output_path / filename).string(), T_back_rs);
 
     //after creating this .csv, should I average the last 15, can you explain again why the first 5 may be bad
-    std::string timing_file = (base_output_path / "timing_" + matid + ".csv").string();
+    std::string timing_file = (base_output_path / ("timing_" + std::to_string(matid) + "_nRho-" + std::to_string(nRho) + "_nT-" + std::to_string(nT) + ".csv")).string();
     std::ofstream timing_out(timing_file);
-    timing_out << "eos_ref_e,rt_e,rs_e,P_eos_ref_T,P_rt_T,P_rs_T,P_eos_ref_sie,P_rt_sie,P_rs_sie,T_back_eos_ref,T_back_rt,T_back_rs\n";
-    for (size_t i = 0; i < time_eos_ref_e_list.size(); ++i) {
-        timing_out << time_eos_ref_e_list[i] << ","
-                    << time_rt_e_list[i] << ","
-                    << time_rs_e_list[i] << ","
-                    << time_P_eos_ref_T_list[i] << ","
-                    << time_P_rt_T_list[i] << ","
-                    << time_P_rs_T_list[i] << ","
-                    << time_P_eos_ref_sie_list[i] << ","
-                    << time_P_rt_sie_list[i] << ","
-                    << time_P_rs_sie_list[i] << ","
-                    << time_T_back_eos_ref_list[i] << ","
-                    << time_T_back_rt_list[i] << ","
-                    << time_T_back_rs_list[i] << "\n";
+
+    timing_out << "e_eos_ref,e_rt,e_rs,P_eos_ref_T,P_rt_T,P_rs_T,P_eos_ref_sie,P_rt_sie,P_rs_sie,T_back_eos_ref,T_back_rt,T_back_rs\n";
+
+    for (size_t i = 0; i < time_e_eos_ref_list.size(); ++i) {
+        timing_out << time_e_eos_ref_list[i] << ","
+                << time_e_rt_list[i] << ","
+                << time_e_rs_list[i] << ","
+                << time_P_eos_ref_T_list[i] << ","
+                << time_P_rt_T_list[i] << ","
+                << time_P_rs_T_list[i] << ","
+                << time_P_eos_ref_sie_list[i] << ","
+                << time_P_rt_sie_list[i] << ","
+                << time_P_rs_sie_list[i] << ","
+                << time_T_back_eos_ref_list[i] << ","
+                << time_T_back_rt_list[i] << ","
+                << time_T_back_rs_list[i] << "\n";
     }
 
-    std::cout << "Benchmark complete: " << timing_file << "\n";
+    std::cout << "Benchmark complete\n";
     return 0;
 }
 }
+
